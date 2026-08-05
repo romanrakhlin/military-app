@@ -1,0 +1,423 @@
+// Valor API — data model
+// Postgres via Railway. `prisma generate` runs on install; migrations via `prisma migrate`.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Auth & profile
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String  @id @default(cuid())
+  email        String  @unique
+  passwordHash String
+  name         String?
+
+  onboardingComplete Boolean @default(false)
+
+  // Onboarding / profile answers (see PATCH /me)
+  status          String? // active | veteran | retired | reserves_guard | family | ...
+  branch          String? // army | navy | air_force | marines | coast_guard | space_force
+  reserveComponent String? // only when status = reserves_guard
+  dutyStatus      String? // only when status = reserves_guard
+  payCategory     String? // enlisted | warrant | officer
+  payGrade        String? // E-1..E-9, W-1..W-5, O-1..O-10
+  yearsServed     Int?
+  goal            String?
+  zip             String?
+  lat             Float?
+  lng             Float?
+  knowsTsp        Boolean @default(false)
+
+  tsp        TspSnapshot?
+  cards      UserCard[]
+  favorites  Favorite[]
+  uploads    Upload[]
+  createdPlaces Place[]        @relation("PlaceCreatedBy")
+  confirmations PlaceConfirmation[]
+  reports       PlaceReport[]
+  refreshTokens RefreshToken[]
+  deviceTokens  DeviceToken[]
+  payProfile    PayProfile?
+  monthlyBills  MonthlyBill[]
+  savedArticles SavedArticle[]
+  notifPrefs    Json? // per-category notification preferences
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model TspSnapshot {
+  id              String @id @default(cuid())
+  userId          String @unique
+  user            User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  balanceCents    Int    @default(0)
+  contributionPct Float  @default(0)
+  // allocation across funds G/F/C/S/I/L (percent, sums ~100)
+  allocation      Json   @default("{\"G\":0,\"F\":0,\"C\":0,\"S\":0,\"I\":0,\"L\":0}")
+  updatedAt       DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Places / Discover
+// ---------------------------------------------------------------------------
+
+enum PlaceType {
+  discount
+  free
+}
+
+enum PlaceStatus {
+  active
+  community_reported
+  in_moderation
+  rejected
+}
+
+model Brand {
+  id            String  @id @default(cuid())
+  name          String
+  category      String
+  blurb         String?
+  logoUrl       String?
+  discountBadge String?
+  places        Place[]
+
+  @@index([category])
+}
+
+model Place {
+  id          String      @id @default(cuid())
+  type        PlaceType
+  name        String
+  brandId     String?
+  brand       Brand?      @relation(fields: [brandId], references: [id], onDelete: SetNull)
+  category    String
+  subcategory String?
+  city        String?
+  address     String?
+  lat         Float
+  lng         Float
+
+  // discount detail
+  discountSummary   String?
+  discountValueType String? // percent | fixed | bogo | free
+  discountValue     Float?
+  eligibility       Json    @default("[]") // string[]
+  proofRequired     Boolean @default(false)
+  channel           String? // in_store | online | both
+
+  // verification
+  verificationStatus String   @default("unverified") // verified | community | unverified
+  confirmations      Int      @default(0)
+  lastVerifiedAt     DateTime?
+
+  status          PlaceStatus @default(active)
+  createdByUserId String?
+  createdBy       User?       @relation("PlaceCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  lastUsedOn      DateTime?
+
+  phone   String?
+  website String?
+  hours   Json?
+
+  // Provenance for data ingested from official APIs (null for community/seed rows).
+  // Unique per (source, externalId) so re-ingesting upserts instead of duplicating.
+  externalSource String? // e.g. "nps" | "va_facilities"
+  externalId     String?
+
+  favorites     Favorite[]
+  confirmationLog PlaceConfirmation[]
+  reports         PlaceReport[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([externalSource, externalId])
+  @@index([type])
+  @@index([category])
+  @@index([status])
+  @@index([lat, lng])
+}
+
+model Favorite {
+  userId  String
+  placeId String
+  user    User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  place   Place @relation(fields: [placeId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@id([userId, placeId])
+  @@index([userId])
+}
+
+model PlaceConfirmation {
+  id        String   @id @default(cuid())
+  placeId   String
+  userId    String
+  place     Place    @relation(fields: [placeId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([placeId, userId])
+  @@index([placeId])
+}
+
+model PlaceReport {
+  id        String   @id @default(cuid())
+  placeId   String
+  userId    String
+  place     Place    @relation(fields: [placeId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reason    String
+  comment   String?
+  createdAt DateTime @default(now())
+
+  @@index([placeId])
+}
+
+model Upload {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  url         String
+  contentType String?
+  createdAt   DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Explore — cards, content, reference data
+// ---------------------------------------------------------------------------
+
+model CardProduct {
+  id        String @id @default(cuid())
+  name      String
+  issuer    String?
+  category  String?
+  annualFeeCents Int @default(0)
+  blurb     String?
+  // benefits: [{ id, name, description, amountCents, period }]
+  //   period ∈ monthly | quarterly | semiannual | annual | one_time
+  benefits  Json   @default("[]")
+  // Lounge-access programs this card grants (matched against Lounge.accessPrograms)
+  loungePrograms Json @default("[]") // ["priority_pass","amex_platinum",...]
+  // Annual fee waived for eligible military members (SCRA/MLA)
+  waivesFeeForMilitary Boolean @default(false)
+  userCards UserCard[]
+}
+
+model UserCard {
+  id           String   @id @default(cuid())
+  userId       String
+  productId    String
+  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product      CardProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+  openedOn     DateTime?
+  // Optional anniversary/reset anchor; when null, benefits reset on the calendar.
+  resetDate    DateTime?
+  usedBenefits Json     @default("[]") // legacy: benefit ids marked used (kept for compat)
+  usages       CardBenefitUsage[]
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+}
+
+// Per-period usage of a card benefit (drives "remaining value" + reminders).
+model CardBenefitUsage {
+  id             String   @id @default(cuid())
+  userCardId     String
+  userCard       UserCard @relation(fields: [userCardId], references: [id], onDelete: Cascade)
+  benefitId      String
+  periodKey      String   // e.g. "2026-01" (monthly), "2026-Q1", "2026-H1", "2026" (annual)
+  usedAmountCents Int     @default(0)
+  usedAt         DateTime @default(now())
+
+  @@unique([userCardId, benefitId, periodKey])
+  @@index([userCardId])
+}
+
+model Article {
+  id           String   @id @default(cuid())
+  emoji        String?
+  title        String
+  excerpt      String?
+  tag          String?
+  category     String?
+  readMinutes  Int      @default(3)
+  body         String?  @db.Text
+  // sections: [{ id, heading, anchor }] for in-article jump navigation
+  sections     Json     @default("[]")
+  sources      Json     @default("[]")
+  trustLabels  Json     @default("[]")
+  source       String?
+  lastReviewedAt DateTime?
+  publishedAt  DateTime @default(now())
+
+  savedBy      SavedArticle[]
+
+  @@index([category])
+}
+
+model StateBenefit {
+  id             String   @id @default(cuid())
+  state          String
+  status         String? // eligibility status filter
+  category       String
+  title          String
+  body           String?  @db.Text
+  source         String?
+  lastReviewedAt DateTime?
+
+  @@index([state])
+  @@index([category])
+}
+
+model Airport {
+  id      String @id @default(cuid())
+  code    String @unique
+  name    String
+  city    String?
+  state   String?
+  lat     Float
+  lng     Float
+  details Json   @default("{}")
+  lounges Lounge[]
+}
+
+model Lounge {
+  id             String  @id @default(cuid())
+  airportId      String
+  airport        Airport @relation(fields: [airportId], references: [id], onDelete: Cascade)
+  name           String
+  terminal       String?
+  type           String  @default("card") // uso | card | paid | military
+  // Access programs; matched against CardProduct.loungePrograms + "uso"/"military"
+  accessPrograms Json    @default("[]")
+  notes          String?
+
+  @@index([airportId])
+}
+
+model HealthResource {
+  id       String  @id @default(cuid())
+  category String
+  state    String?
+  title    String
+  body     String? @db.Text
+  source   String?
+
+  @@index([category])
+  @@index([state])
+}
+
+model HealthFacility {
+  id       String @id @default(cuid())
+  name     String
+  category String?
+  address  String?
+  city     String?
+  state    String?
+  lat      Float
+  lng      Float
+  phone    String?
+  website  String?
+
+  externalSource String? // e.g. "va_facilities"
+  externalId     String?
+
+  @@unique([externalSource, externalId])
+  @@index([lat, lng])
+}
+
+// ---------------------------------------------------------------------------
+// Notifications
+// ---------------------------------------------------------------------------
+
+model DeviceToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  platform  String?  @default("ios")
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Saved financial inputs (synced across devices) + content saves
+// ---------------------------------------------------------------------------
+
+// Saved pay-calculator inputs (one per user). Interconnects with /calc/pay and Home.
+model PayProfile {
+  id                    String  @id @default(cuid())
+  userId                String  @unique
+  user                  User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dependents            Int     @default(0)
+  married               Boolean @default(false)
+  livesOnBase           Boolean @default(false)
+  specialPays           Json    @default("[]") // [{ id, monthly_cents }]
+  additionalIncomeCents Int     @default(0)
+  stateOfResidence      String?
+  // VA disability income entry folded into the pay picture
+  vaRating              Int?    // 0,10,20,...,100
+  vaMarried             Boolean @default(false)
+  vaChildren            Int     @default(0)
+  vaDependentParents    Int     @default(0)
+  updatedAt             DateTime @updatedAt
+}
+
+model MonthlyBill {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label      String
+  amountCents Int
+  category   String?
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+}
+
+model SavedArticle {
+  userId    String
+  articleId String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  article   Article  @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@id([userId, articleId])
+  @@index([userId])
+}
+
+model Announcement {
+  id          String   @id @default(cuid())
+  title       String
+  body        String?  @db.Text
+  kind        String   @default("news") // news | feature | benefit | alert
+  deeplink    String?
+  publishedAt DateTime @default(now())
+  expiresAt   DateTime?
+  active      Boolean  @default(true)
+
+  @@index([active, publishedAt])
+}
