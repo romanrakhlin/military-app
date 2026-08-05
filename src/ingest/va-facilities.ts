@@ -8,7 +8,7 @@ import { env } from "../env.js";
 import { getJson, firstNumber } from "./http.js";
 import type { IngestResult } from "./nps.js";
 
-const VA_BASE = "https://api.va.gov/services/va_facilities/v1";
+const VA_BASE = env.VA_FACILITIES_BASE ?? "https://api.va.gov/services/va_facilities/v1";
 const SOURCE = "va_facilities";
 
 interface VaAddressPart {

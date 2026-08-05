@@ -18,6 +18,9 @@ const EnvSchema = z.object({
   // adapter is skipped with a note; the server itself never needs them.
   NPS_API_KEY: z.string().optional(),
   VA_API_KEY: z.string().optional(),
+  // Override the VA Facilities base URL. Default is production; set to
+  // https://sandbox-api.va.gov/services/va_facilities/v1 to use a sandbox key.
+  VA_FACILITIES_BASE: z.string().optional(),
 });
 
 const parsed = EnvSchema.safeParse(process.env);
