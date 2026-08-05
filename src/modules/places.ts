@@ -78,8 +78,10 @@ export function placesRoutes(): Router {
         const rawOffset = q.cursor ? Number(Buffer.from(q.cursor, "base64url").toString("utf8")) : 0;
         const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? Math.floor(rawOffset) : 0;
         // Deterministic candidate set: stable order so successive pages see the
-        // same rows. The whole table is a few thousand rows; the box narrows it.
-        const candidates = await prisma.place.findMany({ where, orderBy: { id: "asc" }, take: 5000 });
+        // same rows. Cap comfortably above the full table size (~20k places);
+        // in-memory haversine over that is cheap. Revisit with PostGIS if the
+        // table grows past this.
+        const candidates = await prisma.place.findMany({ where, orderBy: { id: "asc" }, take: 25000 });
         const withDistance = candidates
           .map((p) => ({ p, d: haversineMiles(origin.lat, origin.lng, p.lat, p.lng) }))
           // Radius applies only to center searches; a client bbox is exact.

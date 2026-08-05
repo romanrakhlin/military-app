@@ -23,6 +23,9 @@ const EnvSchema = z.object({
   // Override the VA Facilities base URL. Default is production; set to
   // https://sandbox-api.va.gov/services/va_facilities/v1 to use a sandbox key.
   VA_FACILITIES_BASE: z.string().optional(),
+  // Preferred Overpass API endpoint for OSM discount-location ingestion
+  // (tried first, then public mirrors). No key needed.
+  OVERPASS_BASE: z.string().optional(),
 });
 
 const parsed = EnvSchema.safeParse(process.env);

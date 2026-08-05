@@ -66,18 +66,24 @@ export function chainsRoutes(): Router {
         const brand = await prisma.brand.findUnique({ where: { id: params.id } });
         if (!brand) throw ApiError.notFound("Chain not found");
 
+        // Fetch the brand's full location set (few thousand max), then sort by
+        // distance and return the nearest 100 — an arbitrary take(100) subset
+        // would show the wrong "nearby" stores for national chains.
         const places = await prisma.place.findMany({
           where: { brandId: brand.id, status: "active" },
-          take: 100,
+          orderBy: { id: "asc" },
+          take: 10000,
         });
         const origin = query.lat != null && query.lng != null ? { lat: query.lat, lng: query.lng } : undefined;
 
-        const sorted = origin
-          ? places
-              .map((p) => ({ p, d: haversineMiles(origin.lat, origin.lng, p.lat, p.lng) }))
-              .sort((a, b) => a.d - b.d)
-              .map((x) => x.p)
-          : places;
+        const sorted = (
+          origin
+            ? places
+                .map((p) => ({ p, d: haversineMiles(origin.lat, origin.lng, p.lat, p.lng) }))
+                .sort((a, b) => a.d - b.d)
+                .map((x) => x.p)
+            : places
+        ).slice(0, 100);
 
         return {
           brand: { id: brand.id, name: brand.name, category: brand.category },

@@ -9,10 +9,12 @@
 import { disconnectDb } from "../db.js";
 import { ingestNps, type IngestResult } from "./nps.js";
 import { ingestVaFacilities } from "./va-facilities.js";
+import { ingestOsmDiscounts } from "./osm.js";
 
 const ADAPTERS: Record<string, () => Promise<IngestResult>> = {
   nps: ingestNps,
   va: ingestVaFacilities,
+  osm: ingestOsmDiscounts,
 };
 
 async function main() {
