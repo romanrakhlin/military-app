@@ -27,6 +27,20 @@ function daysFromNow(d: number) {
 const periodKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 
 async function main() {
+  // This seed WIPES every table before inserting demo fixtures. Refuse to run
+  // against anything that looks like a hosted/production database unless the
+  // operator explicitly forces it.
+  const dbUrl = process.env.DATABASE_URL ?? "";
+  const looksHosted = /rlwy\.net|railway\.internal|railway\.app|proxy\./i.test(dbUrl);
+  if ((looksHosted || process.env.NODE_ENV === "production") && process.env.SEED_FORCE !== "1") {
+    console.error(
+      "Refusing to seed: DATABASE_URL points at a hosted database (or NODE_ENV=production).\n" +
+        "This script deletes ALL rows in every table before seeding demo data.\n" +
+        "If you really mean it, re-run with SEED_FORCE=1.",
+    );
+    process.exit(1);
+  }
+
   console.log("Seeding Valor database…");
 
   // -------------------------------------------------------------------------

@@ -49,7 +49,10 @@ export function placesRoutes(): Router {
     requireAuth,
     handler({ query: listQuery }, async ({ query: q, userId }) => {
       const limit = clampLimit(q.limit);
-      const box = parseBbox(q.bbox) ?? (q.lat != null && q.lng != null ? radiusBox(q.lat, q.lng, q.radius) : undefined);
+      // A client-supplied bbox (map viewport) defines the area exactly; the
+      // radius only applies when we derived the box from a lat/lng center.
+      const clientBox = parseBbox(q.bbox);
+      const box = clientBox ?? (q.lat != null && q.lng != null ? radiusBox(q.lat, q.lng, q.radius) : undefined);
       const origin = q.lat != null && q.lng != null ? { lat: q.lat, lng: q.lng } : undefined;
 
       const where: Prisma.PlaceWhereInput = { status: "active" };
@@ -70,28 +73,32 @@ export function placesRoutes(): Router {
         where.lng = { gte: box.minLng, lte: box.maxLng };
       }
 
-      const countInArea = await prisma.place.count({ where });
-
       // Distance sort requires in-memory ordering; use a numeric offset cursor.
       if (q.sort === "distance" && origin) {
-        const offset = q.cursor ? Number(Buffer.from(q.cursor, "base64url").toString("utf8")) || 0 : 0;
-        const candidates = await prisma.place.findMany({ where, take: 500 });
+        const rawOffset = q.cursor ? Number(Buffer.from(q.cursor, "base64url").toString("utf8")) : 0;
+        const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? Math.floor(rawOffset) : 0;
+        // Deterministic candidate set: stable order so successive pages see the
+        // same rows. The whole table is a few thousand rows; the box narrows it.
+        const candidates = await prisma.place.findMany({ where, orderBy: { id: "asc" }, take: 5000 });
         const withDistance = candidates
           .map((p) => ({ p, d: haversineMiles(origin.lat, origin.lng, p.lat, p.lng) }))
-          .filter((x) => !box || x.d <= q.radius)
-          .sort((a, b) => a.d - b.d);
+          // Radius applies only to center searches; a client bbox is exact.
+          .filter((x) => (clientBox ? true : x.d <= q.radius))
+          .sort((a, b) => a.d - b.d || (a.p.id < b.p.id ? -1 : 1));
         const pageRows = withDistance.slice(offset, offset + limit);
         const favIds = await favoriteIdsFor(userId, pageRows.map((x) => x.p.id));
         const nextOffset = offset + limit;
         return {
           data: pageRows.map((x) => serializePlace(x.p, { origin, favoriteIds: favIds })),
-          count_in_area: countInArea,
+          count_in_area: withDistance.length,
           next_cursor:
             nextOffset < withDistance.length
               ? Buffer.from(String(nextOffset), "utf8").toString("base64url")
               : null,
         };
       }
+
+      const countInArea = await prisma.place.count({ where });
 
       // Non-distance sort: keyset by id/createdAt.
       const orderBy: Prisma.PlaceOrderByWithRelationInput =
@@ -158,7 +165,10 @@ export function placesRoutes(): Router {
       },
       async ({ params, query, userId }) => {
         const place = await prisma.place.findUnique({ where: { id: params.id } });
-        if (!place || place.status === "rejected") throw ApiError.notFound("Place not found");
+        // Pre-moderation submissions are visible only to their submitter.
+        if (!place || (place.status !== "active" && place.createdByUserId !== userId)) {
+          throw ApiError.notFound("Place not found");
+        }
         const origin = query.lat != null && query.lng != null ? { lat: query.lat, lng: query.lng } : undefined;
         const favIds = await favoriteIdsFor(userId, [place.id]);
         return serializePlace(place, { origin, favoriteIds: favIds });
@@ -176,26 +186,35 @@ export function placesRoutes(): Router {
           type: z.enum(["discount", "free"]),
           name: z.string().min(1).max(200),
           address: z.string().min(1).max(300),
-          lat: z.number(),
-          lng: z.number(),
-          category: z.string().min(1),
-          subcategory: z.string().optional(),
-          city: z.string().optional(),
+          lat: z.number().min(-90).max(90),
+          lng: z.number().min(-180).max(180),
+          category: z.string().min(1).max(100),
+          subcategory: z.string().max(100).optional(),
+          city: z.string().max(100).optional(),
           discount: z.object({
-            summary: z.string(),
+            summary: z.string().max(500),
             value_type: z.enum(["percent", "fixed", "bogo", "free"]).optional(),
             value: z.number().optional(),
             eligibility: z.array(z.string()).default([]),
             proof_required: z.boolean().default(false),
             channel: z.enum(["in_store", "online", "both"]).optional(),
           }),
-          description: z.string().optional(),
+          description: z.string().max(1000).optional(),
           website: z.string().url().optional(),
           photo_upload_id: z.string().optional(),
           last_used_on: z.string().datetime().optional(),
         }),
       },
       async ({ body: b, userId, res }) => {
+        // Per-user submission cap — community adds go to moderation anyway,
+        // so a runaway client/spammer gets stopped here, not in the queue.
+        const recentSubmissions = await prisma.place.count({
+          where: { createdByUserId: userId, createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+        });
+        if (recentSubmissions >= 20) {
+          throw ApiError.tooMany("Daily submission limit reached — try again tomorrow");
+        }
+
         // Simple server-side dedupe: same name within ~0.5mi already reported.
         const box = radiusBox(b.lat, b.lng, 0.5);
         const dupe = await prisma.place.findFirst({
@@ -217,7 +236,7 @@ export function placesRoutes(): Router {
             lng: b.lng,
             category: b.category,
             subcategory: b.subcategory,
-            discountSummary: b.discount.summary,
+            discountSummary: b.discount.summary || b.description,
             discountValueType: b.discount.value_type,
             discountValue: b.discount.value,
             eligibility: b.discount.eligibility,
@@ -241,7 +260,9 @@ export function placesRoutes(): Router {
     requireAuth,
     handler({ params: z.object({ id: z.string() }) }, async ({ params, userId }) => {
       const place = await prisma.place.findUnique({ where: { id: params.id } });
-      if (!place) throw ApiError.notFound("Place not found");
+      // Only live places accumulate confirmations — otherwise a submitter's
+      // sock puppets could "verify" their own pending entry pre-moderation.
+      if (!place || place.status !== "active") throw ApiError.notFound("Place not found");
 
       await prisma.placeConfirmation.upsert({
         where: { placeId_userId: { placeId: place.id, userId } },
@@ -267,13 +288,17 @@ export function placesRoutes(): Router {
     handler(
       {
         params: z.object({ id: z.string() }),
-        body: z.object({ reason: z.string().min(1), comment: z.string().max(1000).optional() }),
+        body: z.object({ reason: z.string().min(1).max(200), comment: z.string().max(1000).optional() }),
       },
       async ({ params, body, userId }) => {
         const place = await prisma.place.findUnique({ where: { id: params.id } });
         if (!place) throw ApiError.notFound("Place not found");
-        await prisma.placeReport.create({
-          data: { placeId: place.id, userId, reason: body.reason, comment: body.comment },
+        // One report per user per place (unique constraint); re-reporting
+        // updates the reason instead of piling on rows.
+        await prisma.placeReport.upsert({
+          where: { placeId_userId: { placeId: place.id, userId } },
+          create: { placeId: place.id, userId, reason: body.reason, comment: body.comment },
+          update: { reason: body.reason, comment: body.comment },
         });
         return { ok: true };
       },

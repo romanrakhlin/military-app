@@ -33,6 +33,7 @@ export interface IngestResult {
   source: string;
   upserted: number;
   skipped: number;
+  removed?: number;
   note?: string;
 }
 
@@ -46,10 +47,14 @@ export async function ingestNps(): Promise<IngestResult> {
   let total = Infinity;
   let upserted = 0;
   let skipped = 0;
+  const seen: string[] = [];
 
   while (start < total) {
     const res = await getJson<NpsResponse>(`${NPS_BASE}/parks?limit=${limit}&start=${start}`, headers);
-    total = Number(res.total) || 0;
+    // Don't trust `total` blindly — a malformed value would silently stop the
+    // run after one page. Keep paging while pages come back full.
+    const reportedTotal = Number(res.total);
+    total = Number.isFinite(reportedTotal) && reportedTotal > 0 ? reportedTotal : Infinity;
     if (!res.data.length) break;
 
     for (const p of res.data) {
@@ -100,10 +105,27 @@ export async function ingestNps(): Promise<IngestResult> {
           externalId: p.parkCode,
         },
       });
+      seen.push(p.parkCode);
       upserted++;
     }
+    if (res.data.length < limit) break;
     start += limit;
   }
 
-  return { source: SOURCE, upserted, skipped, note: skipped ? `${skipped} skipped (no coordinates)` : undefined };
+  // Sweep rows that vanished upstream. Only runs after a fully successful
+  // fetch (any thrown error above aborts first), and never on an empty run.
+  let removed = 0;
+  if (seen.length > 0) {
+    removed = (
+      await prisma.place.deleteMany({
+        where: { externalSource: SOURCE, externalId: { notIn: seen } },
+      })
+    ).count;
+  }
+
+  const notes = [
+    skipped ? `${skipped} skipped (no coordinates)` : null,
+    removed ? `${removed} stale rows removed` : null,
+  ].filter(Boolean);
+  return { source: SOURCE, upserted, skipped, removed, note: notes.length ? notes.join("; ") : undefined };
 }

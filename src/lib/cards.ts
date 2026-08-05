@@ -61,7 +61,7 @@ export function computeBenefitStates(
   anchor?: Date | null,
 ): BenefitState[] {
   return benefits.map((b) => {
-    const key = periodKey(b.period, now);
+    const key = periodKey(b.period, now, anchor);
     const used = usages
       .filter((u) => u.benefitId === b.id && u.periodKey === key)
       .reduce((sum, u) => sum + u.usedAmountCents, 0);

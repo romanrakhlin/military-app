@@ -4,6 +4,7 @@ import { z } from "zod";
 import { prisma } from "../db.js";
 import { ApiError } from "../lib/errors.js";
 import { handler, requireAuth } from "../lib/http.js";
+import { isValidPayGrade } from "../data/pay.js";
 
 const allocationSchema = z.object({
   G: z.number().min(0).max(100),
@@ -16,20 +17,20 @@ const allocationSchema = z.object({
 
 const patchMeSchema = z
   .object({
-    status: z.string().optional(),
-    branch: z.string().optional(),
-    reserve_component: z.string().optional(),
-    duty_status: z.string().optional(),
-    pay_category: z.string().optional(),
-    pay_grade: z.string().optional(),
+    status: z.enum(["active", "veteran", "retired", "reserves_guard", "family"]).optional(),
+    branch: z.enum(["army", "navy", "air_force", "marines", "coast_guard", "space_force"]).optional(),
+    reserve_component: z.string().max(50).optional(),
+    duty_status: z.string().max(50).optional(),
+    pay_category: z.enum(["enlisted", "warrant", "officer"]).optional(),
+    pay_grade: z.string().refine(isValidPayGrade, "Unknown pay grade — see /calc/pay/options").optional(),
     years_served: z.number().int().min(0).max(50).optional(),
-    goal: z.string().optional(),
+    goal: z.string().max(200).optional(),
     zip: z.string().min(3).max(10).optional(),
-    location: z.object({ lat: z.number(), lng: z.number() }).optional(),
+    location: z.object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) }).optional(),
     knows_tsp: z.boolean().optional(),
     tsp: z
       .object({
-        balance_cents: z.number().int().min(0),
+        balance_cents: z.number().int().min(0).max(2_000_000_000),
         contribution_pct: z.number().min(0).max(100),
         allocation: allocationSchema,
       })
@@ -107,24 +108,28 @@ export function meRoutes(): Router {
         data.lng = b.location.lng;
       }
 
-      await prisma.user.update({ where: { id: userId }, data });
-
-      if (b.tsp) {
-        await prisma.tspSnapshot.upsert({
-          where: { userId },
-          create: {
-            userId,
-            balanceCents: b.tsp.balance_cents,
-            contributionPct: b.tsp.contribution_pct,
-            allocation: b.tsp.allocation,
-          },
-          update: {
-            balanceCents: b.tsp.balance_cents,
-            contributionPct: b.tsp.contribution_pct,
-            allocation: b.tsp.allocation,
-          },
-        });
-      }
+      // Profile + TSP snapshot commit together or not at all.
+      await prisma.$transaction([
+        prisma.user.update({ where: { id: userId }, data }),
+        ...(b.tsp
+          ? [
+              prisma.tspSnapshot.upsert({
+                where: { userId },
+                create: {
+                  userId,
+                  balanceCents: b.tsp.balance_cents,
+                  contributionPct: b.tsp.contribution_pct,
+                  allocation: b.tsp.allocation,
+                },
+                update: {
+                  balanceCents: b.tsp.balance_cents,
+                  contributionPct: b.tsp.contribution_pct,
+                  allocation: b.tsp.allocation,
+                },
+              }),
+            ]
+          : []),
+      ]);
 
       return serializeUser(await loadUserOr404(userId));
     }),

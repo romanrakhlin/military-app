@@ -18,7 +18,7 @@ export function notificationsRoutes(): Router {
     "/notifications/register",
     requireAuth,
     handler(
-      { body: z.object({ device_token: z.string().min(1), platform: z.string().optional() }) },
+      { body: z.object({ device_token: z.string().min(1).max(500), platform: z.enum(["ios", "android"]).optional() }) },
       async ({ body, userId }) => {
         await prisma.deviceToken.upsert({
           where: { token: body.device_token },
@@ -42,7 +42,23 @@ export function notificationsRoutes(): Router {
   r.put(
     "/notifications/preferences",
     requireAuth,
-    handler({ body: z.object({ preferences: z.record(z.boolean()) }) }, async ({ body, userId }) => {
+    handler(
+      {
+        body: z.object({
+          // Only the known preference keys — junk keys would be persisted and
+          // echoed back forever.
+          preferences: z
+            .object({
+              new_discounts: z.boolean().optional(),
+              expiring_benefits: z.boolean().optional(),
+              tsp_updates: z.boolean().optional(),
+              community: z.boolean().optional(),
+              product_news: z.boolean().optional(),
+            })
+            .strict(),
+        }),
+      },
+      async ({ body, userId }) => {
       const merged = { ...DEFAULT_PREFS, ...body.preferences };
       await prisma.user.update({ where: { id: userId }, data: { notifPrefs: merged } });
       return { preferences: merged };

@@ -27,6 +27,7 @@ async function main() {
 
   console.log(`Ingesting: ${selected.join(", ")}\n`);
   const results: IngestResult[] = [];
+  const failed: string[] = [];
   for (const name of selected) {
     const started = Date.now();
     try {
@@ -36,12 +37,20 @@ async function main() {
       const note = result.note ? ` — ${result.note}` : "";
       console.log(`  ✓ ${result.source}: ${result.upserted} upserted in ${secs}s${note}`);
     } catch (err) {
+      failed.push(name);
       console.error(`  ✗ ${name} failed:`, err instanceof Error ? err.message : err);
     }
   }
 
   const total = results.reduce((sum, r) => sum + r.upserted, 0);
   console.log(`\nDone. ${total} records upserted.`);
+
+  // A failed adapter must fail the run — otherwise cron/CI reports success
+  // while the data silently ages.
+  if (failed.length) {
+    console.error(`Adapters failed: ${failed.join(", ")}`);
+    process.exitCode = 1;
+  }
 }
 
 main()

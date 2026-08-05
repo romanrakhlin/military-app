@@ -40,6 +40,12 @@ const BASE_PAY_2024: Record<string, [number, number][]> = {
   "O-10": [[0, 18789], [30, 21600]],
 };
 
+/** Grades we have pay tables for. Callers must validate before computing —
+ * an unknown grade would otherwise yield $0 base plus a garbage BAH tier. */
+export function isValidPayGrade(grade: string): boolean {
+  return Object.prototype.hasOwnProperty.call(BASE_PAY_2024, grade);
+}
+
 function bracketValue(grade: string, years: number): number {
   const table = BASE_PAY_2024[grade];
   if (!table) return 0;
@@ -173,7 +179,7 @@ export function estimateMonthlyPayCents(args: {
   yearsServed: number;
   zip?: string | null;
 }): number {
-  if (!args.payGrade) return 0;
+  if (!args.payGrade || !isValidPayGrade(args.payGrade)) return 0;
   const result = computePay({
     payGrade: args.payGrade,
     yearsServed: args.yearsServed,

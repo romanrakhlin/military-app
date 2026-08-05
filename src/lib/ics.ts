@@ -11,7 +11,11 @@ export interface IcsEvent {
 }
 
 function esc(text: string): string {
-  return text.replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\n/g, "\\n");
+  return text
+    .replace(/\\/g, "\\\\")
+    .replace(/;/g, "\\;")
+    .replace(/,/g, "\\,")
+    .replace(/\r\n|\r|\n/g, "\\n");
 }
 
 function ymd(d: Date): string {
@@ -38,7 +42,8 @@ function fold(line: string): string {
 }
 
 export function buildIcs(events: IcsEvent[], calendarName = "Valor Card Benefits", stamp?: Date): string {
-  const dtstamp = `${ymd(stamp ?? events[0]?.date ?? new Date(0))}T000000Z`;
+  // DTSTAMP is the generation time, not the event date.
+  const dtstamp = `${ymd(stamp ?? new Date())}T000000Z`;
   const lines: string[] = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
@@ -49,11 +54,13 @@ export function buildIcs(events: IcsEvent[], calendarName = "Valor Card Benefits
   ];
   for (const e of events) {
     const day = ymd(e.date);
+    // DTEND is exclusive per RFC 5545 — an all-day event ends the next day.
+    const nextDay = ymd(new Date(e.date.getTime() + 24 * 60 * 60 * 1000));
     lines.push("BEGIN:VEVENT");
     lines.push(`UID:${esc(e.uid)}`);
     lines.push(`DTSTAMP:${dtstamp}`);
     lines.push(`DTSTART;VALUE=DATE:${day}`);
-    lines.push(`DTEND;VALUE=DATE:${day}`);
+    lines.push(`DTEND;VALUE=DATE:${nextDay}`);
     lines.push(fold(`SUMMARY:${esc(e.title)}`));
     if (e.description) lines.push(fold(`DESCRIPTION:${esc(e.description)}`));
     if (e.url) lines.push(fold(`URL:${esc(e.url)}`));

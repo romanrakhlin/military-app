@@ -61,6 +61,8 @@ export async function ingestVaFacilities(): Promise<IngestResult> {
   let totalPages = Infinity;
   let upserted = 0;
   let skipped = 0;
+  const seenPlaces: string[] = [];
+  const seenHealth: string[] = [];
 
   while (page <= totalPages) {
     const res = await getJson<VaResponse>(`${VA_BASE}/facilities?page=${page}&per_page=${perPage}`, headers);
@@ -77,7 +79,12 @@ export async function ingestVaFacilities(): Promise<IngestResult> {
         skipped++;
         continue;
       }
-      const ftype = attr.facility_type ?? attr.facilityType ?? "va_health_facility";
+      // No type → we can't categorize it; skip rather than guess "medical".
+      const ftype = attr.facility_type ?? attr.facilityType;
+      if (!ftype) {
+        skipped++;
+        continue;
+      }
       const category = TYPE_CATEGORY[ftype] ?? "VA Facility";
       const phys = attr.address?.physical ?? {};
       const address = [phys.address1, phys.address2, phys.address3, phys.city, phys.state, phys.zip]
@@ -136,11 +143,37 @@ export async function ingestVaFacilities(): Promise<IngestResult> {
           update: hfCommon,
           create: { ...hfCommon, externalSource: SOURCE, externalId: f.id },
         });
+        seenHealth.push(f.id);
       }
+      seenPlaces.push(f.id);
       upserted++;
     }
     page += 1;
   }
 
-  return { source: SOURCE, upserted, skipped, note: skipped ? `${skipped} skipped (no coordinates)` : undefined };
+  // Sweep rows that vanished upstream (e.g. sandbox-only ids after switching
+  // to the production API). Only runs after a fully successful fetch — any
+  // thrown error above aborts before reaching this — and never on an empty run.
+  let removed = 0;
+  if (seenPlaces.length > 0) {
+    removed = (
+      await prisma.place.deleteMany({
+        where: { externalSource: SOURCE, externalId: { notIn: seenPlaces } },
+      })
+    ).count;
+    // Same empty-set guard: notIn [] excludes nothing and would wipe the table.
+    if (seenHealth.length > 0) {
+      removed += (
+        await prisma.healthFacility.deleteMany({
+          where: { externalSource: SOURCE, externalId: { notIn: seenHealth } },
+        })
+      ).count;
+    }
+  }
+
+  const notes = [
+    skipped ? `${skipped} skipped (no coordinates or type)` : null,
+    removed ? `${removed} stale rows removed` : null,
+  ].filter(Boolean);
+  return { source: SOURCE, upserted, skipped, removed, note: notes.length ? notes.join("; ") : undefined };
 }

@@ -116,16 +116,17 @@ export function airportsRoutes(): Router {
             { city: { contains: q, mode: "insensitive" } },
           ];
         }
+        const distanceSort = lat != null && lng != null;
         const airports = await prisma.airport.findMany({
           where,
-          take: lat != null ? 500 : limit,
+          take: distanceSort ? 500 : limit,
           include: { _count: { select: { lounges: true } } },
         });
 
-        if (lat != null && lng != null) {
+        if (distanceSort) {
           return {
             data: airports
-              .map((a) => ({ a, d: haversineMiles(lat, lng, a.lat, a.lng) }))
+              .map((a) => ({ a, d: haversineMiles(lat!, lng!, a.lat, a.lng) }))
               .sort((x, y) => x.d - y.d)
               .slice(0, limit)
               .map(({ a, d }) => ({ ...serializeAirport(a), distance_miles: roundMiles(d) })),

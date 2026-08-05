@@ -179,17 +179,32 @@ export function cardsRoutes(): Router {
       async ({ body: b, userId, res }) => {
         const product = await prisma.cardProduct.findUnique({ where: { id: b.product_id } });
         if (!product) throw ApiError.notFound("Card product not found");
+        const now = new Date();
+        const resetDate = b.reset_date ? new Date(b.reset_date) : undefined;
         const card = await prisma.userCard.create({
           data: {
             userId,
             productId: b.product_id,
             openedOn: b.opened_on ? new Date(b.opened_on) : undefined,
-            resetDate: b.reset_date ? new Date(b.reset_date) : undefined,
+            resetDate,
             usedBenefits: b.used_benefits,
           },
-          include: cardInclude,
         });
-        res.status(201).json(serializeUserCard(card as unknown as CardWithProduct, new Date()));
+        // Seed real usage rows for benefits the user marked as already used —
+        // the usedBenefits column is legacy and nothing reads it.
+        const known = parseBenefits(product.benefits).filter((def) => b.used_benefits.includes(def.id));
+        if (known.length > 0) {
+          await prisma.cardBenefitUsage.createMany({
+            data: known.map((def) => ({
+              userCardId: card.id,
+              benefitId: def.id,
+              periodKey: periodKey(def.period, now, resetDate ?? null),
+              usedAmountCents: def.amountCents,
+            })),
+          });
+        }
+        const withUsages = await prisma.userCard.findUnique({ where: { id: card.id }, include: cardInclude });
+        res.status(201).json(serializeUserCard(withUsages as unknown as CardWithProduct, now));
         return undefined;
       },
     ),
@@ -222,7 +237,7 @@ export function cardsRoutes(): Router {
         const benefit = parseBenefits(card.product.benefits).find((b) => b.id === params.bid);
         if (!benefit) throw ApiError.notFound("Benefit not found");
 
-        const key = periodKey(benefit.period, now);
+        const key = periodKey(benefit.period, now, card.resetDate);
         const existing = await prisma.cardBenefitUsage.findUnique({
           where: {
             userCardId_benefitId_periodKey: {
@@ -276,7 +291,7 @@ export function cardsRoutes(): Router {
         const benefit = parseBenefits(card.product.benefits).find((b) => b.id === params.bid);
         if (!benefit) throw ApiError.notFound("Benefit not found");
 
-        const key = periodKey(benefit.period, now);
+        const key = periodKey(benefit.period, now, card.resetDate);
         await prisma.cardBenefitUsage.deleteMany({
           where: { userCardId: card.id, benefitId: benefit.id, periodKey: key },
         });

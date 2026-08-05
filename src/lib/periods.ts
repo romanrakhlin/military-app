@@ -21,8 +21,14 @@ function utc(y: number, m: number, d: number): Date {
   return new Date(Date.UTC(y, m, d));
 }
 
-/** Stable key identifying the period that `date` falls into. */
-export function periodKey(period: BenefitPeriod, date: Date): string {
+/**
+ * Stable key identifying the period that `date` falls into. When `anchor` is
+ * given, annual periods run anniversary-to-anniversary (matching
+ * `nextResetDate`), keyed by the year the current anniversary period started —
+ * e.g. anchor Sep 15: from 2026-09-15 through 2027-09-14 the key is
+ * "2026@09-15". Without an anchor, annual is the calendar year.
+ */
+export function periodKey(period: BenefitPeriod, date: Date, anchor?: Date | null): string {
   const y = date.getUTCFullYear();
   const m = date.getUTCMonth(); // 0-11
   switch (period) {
@@ -32,8 +38,15 @@ export function periodKey(period: BenefitPeriod, date: Date): string {
       return `${y}-Q${Math.floor(m / 3) + 1}`;
     case "semiannual":
       return `${y}-H${m < 6 ? 1 : 2}`;
-    case "annual":
+    case "annual": {
+      if (anchor) {
+        const am = anchor.getUTCMonth();
+        const ad = anchor.getUTCDate();
+        const startYear = utc(y, am, ad) <= date ? y : y - 1;
+        return `${startYear}@${String(am + 1).padStart(2, "0")}-${String(ad).padStart(2, "0")}`;
+      }
       return `${y}`;
+    }
     case "one_time":
       return "once";
   }

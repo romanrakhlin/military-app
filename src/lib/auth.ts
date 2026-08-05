@@ -33,13 +33,26 @@ export async function issueRefreshToken(userId: string): Promise<string> {
 export async function rotateRefreshToken(raw: string): Promise<{ userId: string }> {
   const tokenHash = sha256(raw);
   const record = await prisma.refreshToken.findUnique({ where: { tokenHash } });
-  if (!record || record.revokedAt || record.expiresAt < new Date()) {
-    throw new Error("invalid_refresh_token");
+  if (!record) throw new Error("invalid_refresh_token");
+
+  // Replay of an already-rotated token means it leaked (or the legitimate
+  // holder lost the race to a thief) — revoke the whole session family.
+  if (record.revokedAt) {
+    await revokeAllRefreshTokens(record.userId);
+    throw new Error("refresh_token_reused");
   }
-  await prisma.refreshToken.update({
-    where: { id: record.id },
+  if (record.expiresAt < new Date()) throw new Error("invalid_refresh_token");
+
+  // Conditional update makes rotation single-use even under concurrency: only
+  // one caller wins the revokedAt: null → set transition.
+  const rotated = await prisma.refreshToken.updateMany({
+    where: { id: record.id, revokedAt: null },
     data: { revokedAt: new Date() },
   });
+  if (rotated.count === 0) {
+    await revokeAllRefreshTokens(record.userId);
+    throw new Error("refresh_token_reused");
+  }
   return { userId: record.userId };
 }
 

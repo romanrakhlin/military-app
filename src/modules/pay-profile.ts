@@ -11,7 +11,11 @@ interface SpecialPay {
   monthly_cents: number;
 }
 
-const specialPaySchema = z.object({ id: z.string(), monthly_cents: z.number().int().min(0) });
+// Upper bound keeps every cents value inside Postgres Int4 (and keeps summed
+// incomes sane) — otherwise oversized input 500s at the DB instead of 400ing.
+const MAX_CENTS = 2_000_000_000;
+
+const specialPaySchema = z.object({ id: z.string().max(50), monthly_cents: z.number().int().min(0).max(MAX_CENTS) });
 
 function readSpecialPays(profile: PayProfile | null): SpecialPay[] {
   if (!profile) return [];
@@ -80,19 +84,19 @@ const putProfileSchema = z.object({
   dependents: z.number().int().min(0).max(20).optional(),
   married: z.boolean().optional(),
   lives_on_base: z.boolean().optional(),
-  special_pays: z.array(specialPaySchema).optional(),
-  additional_income_cents: z.number().int().min(0).optional(),
-  state_of_residence: z.string().optional(),
+  special_pays: z.array(specialPaySchema).max(20).optional(),
+  additional_income_cents: z.number().int().min(0).max(MAX_CENTS).optional(),
+  state_of_residence: z.string().max(20).optional(),
   va_rating: z.number().int().optional(),
   va_married: z.boolean().optional(),
-  va_children: z.number().int().min(0).optional(),
-  va_dependent_parents: z.number().int().min(0).optional(),
+  va_children: z.number().int().min(0).max(20).optional(),
+  va_dependent_parents: z.number().int().min(0).max(2).optional(),
 });
 
 const postBillSchema = z.object({
   label: z.string().min(1).max(100),
-  amount_cents: z.number().int().min(0),
-  category: z.string().optional(),
+  amount_cents: z.number().int().min(0).max(MAX_CENTS),
+  category: z.string().max(100).optional(),
 });
 
 export function payProfileRoutes(): Router {

@@ -45,7 +45,12 @@ export function handler<S extends RouteSchemas>(schemas: S, fn: Handler<S>): Req
         body: (schemas.body ? schemas.body.parse(req.body) : undefined) as InferOr<S["body"]>,
         query: (schemas.query ? schemas.query.parse(req.query) : undefined) as InferOr<S["query"]>,
         params: (schemas.params ? schemas.params.parse(req.params) : undefined) as InferOr<S["params"]>,
-        userId: req.userId ?? "",
+        // Routes that read ctx.userId must sit behind requireAuth; failing loud
+        // on access beats silently querying with an empty-string userId.
+        get userId(): string {
+          if (!req.userId) throw ApiError.unauthorized("Authentication required");
+          return req.userId;
+        },
         req,
         res,
       };
@@ -67,8 +72,10 @@ export const requireAuth: RequestHandler = (req, _res, next) => {
   }
   const token = header.slice("Bearer ".length);
   try {
-    const decoded = jwt.verify(token, env.JWT_ACCESS_SECRET) as { sub: string };
-    req.userId = decoded.sub;
+    const decoded = jwt.verify(token, env.JWT_ACCESS_SECRET, { algorithms: ["HS256"] });
+    const sub = typeof decoded === "object" && decoded !== null ? decoded.sub : undefined;
+    if (typeof sub !== "string" || sub.length === 0) throw new Error("missing sub");
+    req.userId = sub;
     next();
   } catch {
     next(ApiError.unauthorized("Invalid or expired access token"));

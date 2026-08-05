@@ -192,6 +192,7 @@ model PlaceReport {
   comment   String?
   createdAt DateTime @default(now())
 
+  @@unique([placeId, userId])
   @@index([placeId])
 }
 

@@ -47,7 +47,7 @@ export function tspRoutes(): Router {
     handler(
       {
         body: z.object({
-          balance_cents: z.number().int().min(0),
+          balance_cents: z.number().int().min(0).max(2_000_000_000),
           contribution_pct: z.number().min(0).max(100),
           allocation: allocationSchema,
         }),
@@ -75,11 +75,11 @@ export function tspRoutes(): Router {
     handler(
       {
         body: z.object({
-          balance_cents: z.number().int().min(0),
+          balance_cents: z.number().int().min(0).max(2_000_000_000),
           contribution_pct: z.number().min(0).max(100),
           allocation: allocationSchema,
           horizon: z.number().int().min(1).max(60),
-          annual_income_cents: z.number().int().min(0).optional(),
+          annual_income_cents: z.number().int().min(0).max(2_000_000_000).optional(),
         }),
       },
       async ({ body: b }) => {

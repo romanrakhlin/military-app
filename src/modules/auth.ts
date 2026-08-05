@@ -1,4 +1,5 @@
 import { Router } from "express";
+import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { prisma } from "../db.js";
 import { ApiError } from "../lib/errors.js";
@@ -24,11 +25,24 @@ async function issueSession(userId: string) {
   return { access_token, refresh_token, token_type: "bearer" as const };
 }
 
+// Much tighter than the global 300 req/min limiter: every guess here costs an
+// argon2 hash, and credentials are worth brute-forcing.
+const credentialLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (_req, res) => {
+    res.status(429).json({ error: { code: "rate_limited", message: "Too many attempts — try again shortly" } });
+  },
+});
+
 export function authRoutes(): Router {
   const r = Router();
 
   r.post(
     "/auth/register",
+    credentialLimiter,
     handler({ body: credentials }, async ({ body, res }) => {
       const existing = await prisma.user.findUnique({ where: { email: body.email.toLowerCase() } });
       if (existing) throw ApiError.conflict("An account with this email already exists", "email");
@@ -43,9 +57,16 @@ export function authRoutes(): Router {
 
   r.post(
     "/auth/login",
-    handler({ body: z.object({ email: z.string().email(), password: z.string() }) }, async ({ body }) => {
+    credentialLimiter,
+    handler({ body: z.object({ email: z.string().email(), password: z.string().max(200) }) }, async ({ body }) => {
       const user = await prisma.user.findUnique({ where: { email: body.email.toLowerCase() } });
-      if (!user || !(await verifyPassword(user.passwordHash, body.password))) {
+      if (!user) {
+        // Burn comparable argon2 time on unknown emails so response timing
+        // doesn't reveal whether an account exists.
+        await hashPassword(body.password);
+        throw ApiError.unauthorized("Invalid email or password");
+      }
+      if (!(await verifyPassword(user.passwordHash, body.password))) {
         throw ApiError.unauthorized("Invalid email or password");
       }
       const session = await issueSession(user.id);

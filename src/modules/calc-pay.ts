@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "../db.js";
 import { ApiError } from "../lib/errors.js";
 import { handler, requireAuth } from "../lib/http.js";
-import { computePay, payOptions } from "../data/pay.js";
+import { computePay, isValidPayGrade, payOptions } from "../data/pay.js";
 import { VALID_RATINGS, computeVaDisability } from "../data/va.js";
 
 export function payRoutes(): Router {
@@ -22,15 +22,18 @@ export function payRoutes(): Router {
       {
         body: z.object({
           branch: z.string().optional(),
-          pay_grade: z.string(),
+          pay_grade: z.string().refine(isValidPayGrade, "Unknown pay grade — see /calc/pay/options"),
           years_served: z.number().int().min(0).max(50),
           zip: z.string().optional(),
           dependents: z.number().int().min(0).max(20).default(0),
           married: z.boolean().default(false),
           lives_on_base: z.boolean().default(false),
-          special_pays: z.array(z.object({ id: z.string(), monthly_cents: z.number().int().min(0) })).default([]),
-          additional_income_cents: z.number().int().min(0).default(0),
-          deductions_cents: z.number().int().min(0).default(0),
+          special_pays: z
+            .array(z.object({ id: z.string().max(50), monthly_cents: z.number().int().min(0).max(2_000_000_000) }))
+            .max(20)
+            .default([]),
+          additional_income_cents: z.number().int().min(0).max(2_000_000_000).default(0),
+          deductions_cents: z.number().int().min(0).max(2_000_000_000).default(0),
           tsp_contribution_pct: z.number().min(0).max(100).default(0),
           state_of_residence: z.string().optional(),
           data_year: z.number().int().optional(),
@@ -66,6 +69,9 @@ export function payRoutes(): Router {
       });
       if (!user) throw ApiError.notFound("User not found");
       if (!user.payGrade) throw ApiError.badRequest("Set your pay grade in your profile first", "pay_grade");
+      if (!isValidPayGrade(user.payGrade)) {
+        throw ApiError.badRequest("Your saved pay grade isn't recognized — update your profile", "pay_grade");
+      }
 
       const [profile, monthlyBills] = await Promise.all([
         prisma.payProfile.findUnique({ where: { userId } }),
