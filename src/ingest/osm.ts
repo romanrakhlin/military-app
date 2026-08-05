@@ -179,7 +179,12 @@ async function overpass(query: string): Promise<OverpassResponse> {
     try {
       const res = await fetch(endpoint, {
         method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          // Overpass operators require an identifying UA; anonymous requests
+          // get rate-limited aggressively.
+          "user-agent": "valor-api-ingest/1.0 (military benefits app; contact: rrakhlin@gmail.com)",
+        },
         body: `data=${encodeURIComponent(query)}`,
         signal: AbortSignal.timeout(240_000),
       });
@@ -271,7 +276,7 @@ export async function ingestOsmDiscounts(): Promise<IngestResult> {
       upserted++;
     }
     console.log(`    ${def.name}: ${res.elements.length} locations`);
-    await sleep(8_000); // politeness between US-wide queries
+    await sleep(15_000); // politeness between US-wide queries
   }
 
   // Sweep OSM rows that vanished upstream. Only after every brand fetched
