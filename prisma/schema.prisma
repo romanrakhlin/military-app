@@ -16,8 +16,11 @@ datasource db {
 
 model User {
   id           String  @id @default(cuid())
-  email        String  @unique
-  passwordHash String
+  // Anonymous device users have neither email nor password; both arrive when
+  // the account is upgraded via /auth/register.
+  email        String? @unique
+  passwordHash String?
+  deviceId     String? @unique
   name         String?
 
   onboardingComplete Boolean @default(false)

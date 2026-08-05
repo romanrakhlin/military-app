@@ -64,6 +64,20 @@ export function handler<S extends RouteSchemas>(schemas: S, fn: Handler<S>): Req
   };
 }
 
+/** Best-effort token parse for routes where auth is optional (e.g. a
+ * device-authenticated user upgrading via /auth/register). Never throws. */
+export function tryGetUserId(req: Request): string | null {
+  const header = req.headers.authorization;
+  if (!header?.startsWith("Bearer ")) return null;
+  try {
+    const decoded = jwt.verify(header.slice("Bearer ".length), env.JWT_ACCESS_SECRET, { algorithms: ["HS256"] });
+    const sub = typeof decoded === "object" && decoded !== null ? decoded.sub : undefined;
+    return typeof sub === "string" && sub.length > 0 ? sub : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Auth middleware — verifies the Bearer access token and attaches req.userId. */
 export const requireAuth: RequestHandler = (req, _res, next) => {
   const header = req.headers.authorization;
